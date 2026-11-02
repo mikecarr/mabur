@@ -152,6 +152,10 @@ struct Stats {
   // key this core is configured with (for the page to show beside it).
   bool key_mismatch = false;
   std::string key_fp;
+  // Wire version (rc_proto.h compat window): ours, the lowest we accept,
+  // the one our uplink currently speaks, and the drone's as last heard on
+  // its DISC_ACK/T_TELEM (-1 = none heard yet; may lie outside the window).
+  int rc_ver = 0, rc_min = 0, rc_tx = 0, peer_rc_ver = -1;
   int channel = 0;              // the card's live channel; start_ch with no roster (replay)
   std::optional<ChanStats> chan;   // Gs with a roster only
   // Spotter with a roster (SpotterFollow): "locked"|"following"|"sweeping" and
@@ -363,6 +367,7 @@ class WebGs {
   uint64_t resets_ = 0;
   uint32_t idr_req_ = 0;
   std::string key_fp_;   // mabur::key_fingerprint(cfg.link.key), set at construction
+  int peer_rc_ver_ = -1;  // drone's RC_VERSION off its last DISC_ACK/T_TELEM (on_rx)
 
   // ---- roster + channel core (Gs with cards) ----
   std::vector<maburgs::LinkCard*> cards_;

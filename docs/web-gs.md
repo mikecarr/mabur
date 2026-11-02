@@ -341,6 +341,10 @@ What the status overlay shows (`statusText()`, `web/ui/src/lib/view.js`):
   ends` — GS mode, the drone answers our DISCs with key_mismatch (our key
   differs from its key; `VrxState::KEY_MISMATCH`); the header tag reads
   `Key mismatch`. See `docs/link-pairing.md`.
+- `Drone speaks protocol RC N; this page supports RC A–B — flash matching
+  firmware or open a matching page` — either mode, the drone's DISC_ACK or
+  T_TELEM carries an `RC_VERSION` outside the page's window; the header tag
+  reads `Protocol mismatch`. See "Protocol window" below.
 - After the first frame, no overlay text covers the video while the
   key-frame gate is unarmed. A freeze holds the last frame and GS mode
   requests an IDR instead of waiting; see "Key-frame recovery" below.
@@ -370,6 +374,27 @@ mcs5/20), not a GS's own tuned `/etc/maburgs.toml`. The Config form (below)
 overrides it per session. A GS box on the same drone may run a different
 ladder, so don't read this page's rung numbers as that GS's unless the form
 was left at its defaults.
+
+### Protocol window
+
+Unlike `maburd`/`maburgs`, which accept only their own `RC_VERSION`, the
+page accepts a window: `RC_VERSION_COMPAT_MIN` (16) up to `RC_VERSION`
+(`common/include/mabur/rc_proto.h`). Every version in it shares the
+DISC/DISC_ACK/RCF/T_TELEM/T_NACK layouts; 17 added T_MAV and 18 deleted
+T_CAL_CMD/T_CAL_RESULT. The core opts in at construction
+(`set_rc_accept_min`), learns the drone's version from its DISC_ACK or
+T_TELEM (`drone_frame_version`, the two drone-only types) and stamps its own
+DISC/RCF/NACK with it from then on (`set_rc_tx_version`). Below
+`RC_VERSION_MAV_MIN` (17) the MAVLink tunnel stays unlinked, so it and the
+ParamClient send nothing (the VTX tab has no parameters there).
+
+The core's stats line carries `rc_ver`, `rc_min`, `rc_tx` and, once a drone
+frame is heard, `peer_rc_ver`. The Debug tab's **Link** group shows them as
+`protocol` (`RC 18 (accepts 16–18)`) and `drone protocol` (`RC 16 · compat,
+MAVLink off`, or `· unsupported` outside the window).
+
+A layout change in a future bump must raise `RC_VERSION_COMPAT_MIN` to the
+new version in the same commit, or the page will misparse older drones.
 
 ### Channel set
 

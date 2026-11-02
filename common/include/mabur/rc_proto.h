@@ -67,6 +67,33 @@ constexpr uint16_t RC_MAGIC = 0x5243;  // "RC"
 // acked the dedicated command frame, is no longer set.
 constexpr uint8_t RC_VERSION = 18;
 
+// Wire compatibility window (opt-in; the default is the exact match above).
+// RC_VERSION 16, 17 and 18 share every DISC/DISC_ACK/RCF/T_TELEM/T_NACK
+// layout: 17 only added T_MAV, 18 only deleted T_CAL_CMD/T_CAL_RESULT. A
+// peer that calls set_rc_accept_min(RC_VERSION_COMPAT_MIN) parses frames
+// from any version in [min, RC_VERSION] and stamps outgoing frames with
+// rc_tx_version(), which it sets to the version its peer speaks. Native
+// maburd/maburgs never opt in, so their behaviour is unchanged.
+constexpr uint8_t RC_VERSION_COMPAT_MIN = 16;
+// First version with T_MAV: never send one to an older peer.
+constexpr uint8_t RC_VERSION_MAV_MIN = 17;
+
+// Lowest version accepted on receive; RC_VERSION (exact match) by default.
+// Clamped to [RC_VERSION_COMPAT_MIN, RC_VERSION].
+void set_rc_accept_min(uint8_t v);
+uint8_t rc_accept_min();
+// True when `v` lies inside the accepted window.
+bool rc_version_ok(uint8_t v);
+// Version byte written into every packed frame; RC_VERSION by default.
+// Ignored (left unchanged) when `v` is outside the accepted window.
+void set_rc_tx_version(uint8_t v);
+uint8_t rc_tx_version();
+// The version byte of a drone -> GS control frame (T_DISC_ACK or T_TELEM),
+// whatever its value, or -1 if `buf` isn't one. Only the drone sends these
+// two types, so the answer can't be our own uplink echoing back. NOT a CRC
+// check: callers gate on crc_ok, as for is_foreign_rc_version().
+int drone_frame_version(const uint8_t* buf, size_t len);
+
 // RCF probe_profile sentinel: the drone runs no probe stream.
 constexpr uint8_t kNoProbeProfile = 0xFF;
 

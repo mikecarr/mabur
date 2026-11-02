@@ -134,6 +134,11 @@ WebGs::WebGs(const maburgs::Config& cfg, Mode mode, uint8_t start_ch, int width,
   // Telem.
   spotter_op_.bw = width;
   key_fp_ = mabur::key_fingerprint(cfg.link.key);
+  // Wire compatibility (rc_proto.h): accept every RC_VERSION that shares
+  // our control-frame layouts, and speak RC_VERSION until a drone frame
+  // says otherwise (on_rx). Reset per core so a reconnect starts clean.
+  mabur::rc::set_rc_accept_min(mabur::rc::RC_VERSION_COMPAT_MIN);
+  mabur::rc::set_rc_tx_version(mabur::rc::RC_VERSION);
   if (mode_ == Mode::Gs) {
     if (!io_.send && cards_.empty())
       throw std::invalid_argument("webgs: Gs mode needs Io::send or a card");
@@ -317,6 +322,17 @@ void WebGs::on_rx(const mabur::node::RxBody& m) {
   // a sweep hearing the GS on the member locks before the RCF is read.
   if (follow_ && m.crc_ok) follow_->on_frame(m.rx_channel, static_cast<double>(now_us_) / 1000.0);
   if (chan_) chan_->on_rc_body(m.rx_channel);   // read by the rc sink inside on_rx_body()
+  // The drone's RC_VERSION, off its DISC_ACK/T_TELEM (any value, so the page
+  // can name an unsupported one). Inside the compat window our uplink
+  // switches to it before the next DISC/RCF is packed; outside it the
+  // setter is a no-op and the frame is dropped as foreign, as before.
+  if (m.crc_ok) {
+    const int pv = mabur::rc::drone_frame_version(m.body.data(), m.body.size());
+    if (pv >= 0) {
+      peer_rc_ver_ = pv;
+      mabur::rc::set_rc_tx_version(static_cast<uint8_t>(pv));
+    }
+  }
   agg_.on_rx_body(m);
   if (!m.crc_ok) return;
   const int sid = mabur::sbi_peek_stream_id(m.body.data(), m.body.size());
@@ -471,7 +487,10 @@ void WebGs::tick(uint64_t now_us) {
     // Tag outbound frames under the live session only: session_ctx() keeps
     // reporting the held nonce while BEACONING, so an unlinked tick tags
     // nothing and the tunnel drops (and counts) whatever is queued.
-    const bool mav_linked = vrx_->link_state() == maburgs::VrxState::SESSION;
+    // A drone below RC_VERSION_MAV_MIN has no T_MAV: treat it as unlinked
+    // so the tunnel (and ParamClient's list request) sends nothing to it.
+    const bool mav_linked = vrx_->link_state() == maburgs::VrxState::SESSION &&
+                            mabur::rc::rc_tx_version() >= mabur::rc::RC_VERSION_MAV_MIN;
     mav_->set_session(mav_linked ? vrx_->session_ctx() : mabur::rc::TagCtx{});
     // ParamClient re-lists on every session edge, and on a vtx_nonce
     // change while still linked (a re-rendezvous that never drops through
@@ -603,6 +622,10 @@ Stats WebGs::stats() const {
     s.mcs = air_mcs_;        // base-stream RX MCS, -1 until one is heard
   }
   s.key_fp = key_fp_;
+  s.rc_ver = mabur::rc::RC_VERSION;
+  s.rc_min = mabur::rc::rc_accept_min();
+  s.rc_tx = mabur::rc::rc_tx_version();
+  s.peer_rc_ver = peer_rc_ver_;
   const auto pre = lha_.pre_all();
   if (pre.valid) s.pre_fec_loss = pre.loss;
   s.residual = lha_.residual();
@@ -667,6 +690,10 @@ std::string stats_json(const Stats& s) {
   j["probe"] = s.probe_state;
   j["key_mismatch"] = s.key_mismatch;
   j["key_fp"] = s.key_fp;
+  j["rc_ver"] = s.rc_ver;
+  j["rc_min"] = s.rc_min;
+  j["rc_tx"] = s.rc_tx;
+  if (s.peer_rc_ver >= 0) j["peer_rc_ver"] = s.peer_rc_ver;
   auto opt = [&](const char* k, const auto& v) {
     if (v)
       j[k] = *v;

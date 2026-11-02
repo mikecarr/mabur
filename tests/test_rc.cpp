@@ -651,4 +651,57 @@ TEST(mav_len_overrun_is_refused_without_reading_past_the_buffer) {
   CHECK(parse_mav(e.data(), e.size(), true).has_value());   // len 0 is legal (a bare keepalive)
 }
 
+// Wire compatibility window (rc_proto.h). Global state: every test leaves
+// the defaults (exact match, tx = RC_VERSION) behind it.
+static void restore_exact() { set_rc_accept_min(RC_VERSION); set_rc_tx_version(RC_VERSION); }
+
+TEST(rc_default_is_exact_match) {
+  restore_exact();
+  CHECK(rc_accept_min() == RC_VERSION);
+  CHECK(rc_tx_version() == RC_VERSION);
+  Telem t;
+  auto wire = pack_telem(t);
+  CHECK(wire[2] == RC_VERSION);
+  wire[2] = RC_VERSION_COMPAT_MIN;   // an older drone's Telem (same layout)
+  CHECK(frame_type(wire.data(), wire.size()) == -1);
+  CHECK(is_foreign_rc_version(wire.data(), wire.size()));
+  set_rc_tx_version(RC_VERSION_COMPAT_MIN);   // outside the window: ignored
+  CHECK(rc_tx_version() == RC_VERSION);
+}
+
+TEST(rc_compat_window_accepts_old_peer_and_speaks_its_version) {
+  restore_exact();
+  set_rc_accept_min(RC_VERSION_COMPAT_MIN);
+  CHECK(rc_version_ok(RC_VERSION_COMPAT_MIN) && rc_version_ok(RC_VERSION));
+  CHECK(!rc_version_ok(RC_VERSION_COMPAT_MIN - 1) && !rc_version_ok(RC_VERSION + 1));
+  set_rc_tx_version(RC_VERSION_COMPAT_MIN);
+  CHECK(rc_tx_version() == RC_VERSION_COMPAT_MIN);
+  // Drone -> GS: stamped with the old version, parsed, version readable.
+  Telem t; t.tlm_seq = 9;
+  auto tw = pack_telem(t);
+  CHECK(tw[2] == RC_VERSION_COMPAT_MIN);
+  CHECK(frame_type(tw.data(), tw.size()) == T_TELEM);
+  CHECK(!is_foreign_rc_version(tw.data(), tw.size()));
+  REQUIRE(parse_telem(tw.data(), tw.size()).has_value());
+  CHECK(parse_telem(tw.data(), tw.size())->tlm_seq == 9);
+  CHECK(drone_frame_version(tw.data(), tw.size()) == RC_VERSION_COMPAT_MIN);
+  // GS -> drone: the tag covers the version byte, so it verifies as sent.
+  Rcf r; r.seq = 3;
+  const TagCtx ctx{1, 2, 3};
+  auto rw = pack_rcf(r, test_key(), ctx);
+  CHECK(rw[2] == RC_VERSION_COMPAT_MIN);
+  REQUIRE(parse_rcf(rw.data(), rw.size()).has_value());
+  CHECK(verify_control(rw.data(), rw.size(), test_key(), ctx));
+  CHECK(drone_frame_version(rw.data(), rw.size()) == -1);   // an uplink type
+  // Below the window stays foreign.
+  auto old = tw; old[2] = RC_VERSION_COMPAT_MIN - 1;
+  CHECK(frame_type(old.data(), old.size()) == -1);
+  CHECK(is_foreign_rc_version(old.data(), old.size()));
+  CHECK(drone_frame_version(old.data(), old.size()) == RC_VERSION_COMPAT_MIN - 1);
+  // Narrowing the window drags an out-of-window tx version back.
+  set_rc_accept_min(RC_VERSION);
+  CHECK(rc_tx_version() == RC_VERSION);
+  restore_exact();
+}
+
 MTEST_MAIN

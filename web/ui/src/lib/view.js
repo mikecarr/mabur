@@ -18,6 +18,26 @@ export function latencyNow(snap, mode) {
   return parts.reduce((n, e) => n + e.p50, 0);
 }
 
+// Wire version (rc_proto.h compat window): the core's own RC_VERSION, the
+// lowest it accepts, the one its uplink speaks, and the drone's as heard on
+// its DISC_ACK/T_TELEM. null until the core reports; peer null until a drone
+// frame is heard. MAV_MIN mirrors rc::RC_VERSION_MAV_MIN (first with T_MAV).
+const RC_MAV_MIN = 17;
+export function rcInfo(core) {
+  if (!core || !has(core.rc_ver)) return null;
+  const peer = has(core.peer_rc_ver) ? core.peer_rc_ver : null;
+  const ok = peer === null || (peer >= core.rc_min && peer <= core.rc_ver);
+  return { ver: core.rc_ver, min: core.rc_min, tx: core.rc_tx, peer, ok,
+    compat: peer !== null && ok && peer !== core.rc_ver, mav: peer === null || peer >= RC_MAV_MIN };
+}
+
+function rcPeerText(rc) {
+  if (!rc || rc.peer === null) return D;
+  if (!rc.ok) return `RC ${rc.peer} · unsupported`;
+  if (!rc.compat) return `RC ${rc.peer}`;
+  return `RC ${rc.peer} · compat${rc.mav ? '' : ', MAVLink off'}`;
+}
+
 const signed = (v, d = 0) => (has(v) ? (Number(v) >= 0 ? '+' : '') + Number(v).toFixed(d) : D);
 
 // Phase lock Debug group (docs/phase-lock.md "Web GS"): phase is
@@ -137,6 +157,7 @@ export function debugGroups({ connected, mode, core, ausRate, hitches60, hitches
   const isRelay = on && core.radio === 'relay';
   const v = (x) => (on ? x : D);
   const rows = (pairs) => pairs.map(([k, val]) => ({ k, v: String(val) }));
+  const rc = rcInfo(core);
   const groups = [
     { title: 'Link', rows: rows([
       ['mode', v(core?.mode)], ['session', v(core?.session ? 'yes' : 'no')],
@@ -144,6 +165,8 @@ export function debugGroups({ connected, mode, core, ausRate, hitches60, hitches
       ['rung', v(core?.rung >= 0 ? core.rung : D)], ['mcs', v(core?.mcs >= 0 ? core.mcs : D)],
       ['width', v(core?.bw ? core.bw + ' MHz' : D)], ['probe', v(core?.probe || 'off')],
       ['key', v(core?.key_fp)], ['key_mismatch', v(core?.key_mismatch ? 'yes' : 'no')],
+      ['protocol', v(rc ? `RC ${rc.ver} (accepts ${rc.min}–${rc.ver})` : D)],
+      ['drone protocol', v(rcPeerText(rc))],
     ]) },
     // Scan/hop state is GS-only (null in spotter); a spotter with a follower
     // shows its follow state; replay-shaped stats show just the channel.
@@ -235,7 +258,10 @@ export function statusText({ state, mode, ch, core, sinceStartMs, w, hiddenBanne
   if (state !== 'live') return '';
   let primary = '';
   const shownCh = has(core?.channel) ? core.channel : ch;
-  if (mode === 'gs' && core?.key_mismatch) {
+  const rc = rcInfo(core);
+  if (rc && !rc.ok) {
+    primary = `Drone speaks protocol RC ${rc.peer}; this page supports RC ${rc.min}–${rc.ver} — flash matching firmware or open a matching page`;
+  } else if (mode === 'gs' && core?.key_mismatch) {
     primary = `Drone rejects our link key (${core.key_fp ?? '?'}) — load the same mabur.key on both ends`;
   } else {
     const noPeer = mode === 'gs' && core?.peer_acked !== true;
@@ -253,6 +279,8 @@ export function linkTag({ state, mode, core }) {
   if (state === 'connecting') return { label: 'Connecting…', on: false };
   if (state === 'stopping') return { label: 'Disconnecting…', on: false };
   if (state !== 'live') return { label: 'Disconnected', on: false };
+  const rc = rcInfo(core);
+  if (rc && !rc.ok) return { label: 'Protocol mismatch', on: false };
   if (mode === 'spotter') return { label: 'Spotter', on: true };
   if (core?.key_mismatch) return { label: 'Key mismatch', on: false };
   return { label: core?.session && core?.peer_acked ? 'Linked' : 'Searching', on: true };

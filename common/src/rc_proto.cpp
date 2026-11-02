@@ -1,5 +1,6 @@
 #include "mabur/rc_proto.h"
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <limits>
@@ -81,7 +82,7 @@ std::vector<uint8_t> pack_rcf(const Rcf& r, const LinkKey& key, const TagCtx& ct
   std::vector<uint8_t> body;
   body.reserve(RCF_HEAD_LEN + kTagLen + 2);
   put16(body, RC_MAGIC);
-  body.push_back(RC_VERSION);
+  body.push_back(rc_tx_version());
   body.push_back(T_RCF);
   body.push_back(0);  // flags: nothing
   put16(body, r.seq);
@@ -101,7 +102,7 @@ std::vector<uint8_t> pack_rcf(const Rcf& r, const LinkKey& key, const TagCtx& ct
 
 std::optional<Rcf> parse_rcf(const uint8_t* buf, size_t len) {
   if (len < RCF_HEAD_LEN + kTagLen + 2) return std::nullopt;
-  if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_RCF)
+  if (get16(buf, 0) != RC_MAGIC || !rc_version_ok(buf[2]) || buf[3] != T_RCF)
     return std::nullopt;
   if (get16(buf, RCF_HEAD_LEN + kTagLen) != crc16_ccitt(buf, RCF_HEAD_LEN + kTagLen))
     return std::nullopt;
@@ -123,7 +124,7 @@ std::vector<uint8_t> pack_disc(const Disc& d, const LinkKey& key) {
   std::vector<uint8_t> body;
   body.reserve(DISC_LEN + kTagLen + 2);
   put16(body, RC_MAGIC);
-  body.push_back(RC_VERSION);
+  body.push_back(rc_tx_version());
   body.push_back(T_DISC);
   body.push_back(F_DISCOVERY);
   put32(body, d.vrx_nonce);
@@ -144,7 +145,7 @@ std::optional<Disc> parse_disc(const uint8_t* buf, size_t len) {
   uint16_t magic = get16(buf, 0);
   uint8_t ver = buf[2];
   uint8_t type = buf[3];
-  if (magic != RC_MAGIC || ver != RC_VERSION || type != T_DISC) return std::nullopt;
+  if (magic != RC_MAGIC || !rc_version_ok(ver) || type != T_DISC) return std::nullopt;
 
   uint16_t crc = get16(buf, DISC_LEN + kTagLen);
   if (crc != crc16_ccitt(buf, DISC_LEN + kTagLen)) return std::nullopt;
@@ -164,7 +165,7 @@ std::vector<uint8_t> pack_disc_ack(const DiscAck& a) {
   std::vector<uint8_t> body;
   body.reserve(DISC_ACK_LEN + 2);
   put16(body, RC_MAGIC);
-  body.push_back(RC_VERSION);
+  body.push_back(rc_tx_version());
   body.push_back(T_DISC_ACK);
   body.push_back(F_DISCOVERY);
   put32(body, a.vrx_nonce);
@@ -184,7 +185,7 @@ std::optional<DiscAck> parse_disc_ack(const uint8_t* buf, size_t len) {
   uint16_t magic = get16(buf, 0);
   uint8_t ver = buf[2];
   uint8_t type = buf[3];
-  if (magic != RC_MAGIC || ver != RC_VERSION || type != T_DISC_ACK) return std::nullopt;
+  if (magic != RC_MAGIC || !rc_version_ok(ver) || type != T_DISC_ACK) return std::nullopt;
 
   uint16_t crc = get16(buf, DISC_ACK_LEN);
   if (crc != crc16_ccitt(buf, DISC_ACK_LEN)) return std::nullopt;
@@ -204,7 +205,7 @@ std::vector<uint8_t> pack_telem(const Telem& t) {
   std::vector<uint8_t> body;
   body.reserve(TELEM_LEN + 2);
   put16(body, RC_MAGIC);
-  body.push_back(RC_VERSION);
+  body.push_back(rc_tx_version());
   body.push_back(T_TELEM);
   body.push_back(t.flags);
   put16(body, t.tlm_seq);
@@ -240,7 +241,7 @@ std::optional<Telem> parse_telem(const uint8_t* buf, size_t len) {
   uint16_t magic = get16(buf, 0);
   uint8_t ver = buf[2];
   uint8_t type = buf[3];
-  if (magic != RC_MAGIC || ver != RC_VERSION || type != T_TELEM) return std::nullopt;
+  if (magic != RC_MAGIC || !rc_version_ok(ver) || type != T_TELEM) return std::nullopt;
 
   uint16_t crc = get16(buf, TELEM_LEN);
   if (crc != crc16_ccitt(buf, TELEM_LEN)) return std::nullopt;
@@ -274,11 +275,41 @@ std::optional<Telem> parse_telem(const uint8_t* buf, size_t len) {
   return t;
 }
 
+namespace {
+// Relaxed atomics: the web core sets these from its RX path and packs from
+// the same thread; native peers never touch them. Atomic only so a future
+// cross-thread setter can't tear a read.
+std::atomic<uint8_t> g_accept_min{RC_VERSION};
+std::atomic<uint8_t> g_tx_version{RC_VERSION};
+}  // namespace
+
+void set_rc_accept_min(uint8_t v) {
+  g_accept_min.store(std::clamp<uint8_t>(v, RC_VERSION_COMPAT_MIN, RC_VERSION),
+                     std::memory_order_relaxed);
+  if (!rc_version_ok(rc_tx_version())) g_tx_version.store(RC_VERSION, std::memory_order_relaxed);
+}
+
+uint8_t rc_accept_min() { return g_accept_min.load(std::memory_order_relaxed); }
+
+bool rc_version_ok(uint8_t v) { return v >= rc_accept_min() && v <= RC_VERSION; }
+
+void set_rc_tx_version(uint8_t v) {
+  if (rc_version_ok(v)) g_tx_version.store(v, std::memory_order_relaxed);
+}
+
+uint8_t rc_tx_version() { return g_tx_version.load(std::memory_order_relaxed); }
+
+int drone_frame_version(const uint8_t* buf, size_t len) {
+  if (len < 4 || get16(buf, 0) != RC_MAGIC) return -1;
+  if (buf[3] != T_DISC_ACK && buf[3] != T_TELEM) return -1;
+  return buf[2];
+}
+
 int frame_type(const uint8_t* buf, size_t len) {
   if (len < 4) return -1;
   uint16_t magic = get16(buf, 0);
   uint8_t ver = buf[2];
-  if (magic != RC_MAGIC || ver != RC_VERSION) return -1;
+  if (magic != RC_MAGIC || !rc_version_ok(ver)) return -1;
   return buf[3];
 }
 
@@ -286,7 +317,7 @@ bool is_foreign_rc_version(const uint8_t* buf, size_t len) {
   // Same 4-byte minimum as frame_type(): below it there is no frame to talk
   // about, so a truncated body is never reported as a version mismatch.
   if (len < 4) return false;
-  return get16(buf, 0) == RC_MAGIC && buf[2] != RC_VERSION;
+  return get16(buf, 0) == RC_MAGIC && !rc_version_ok(buf[2]);
 }
 
 std::vector<uint8_t> pack_nack(const Nack& n, const LinkKey& key, const TagCtx& ctx) {
@@ -294,7 +325,7 @@ std::vector<uint8_t> pack_nack(const Nack& n, const LinkKey& key, const TagCtx& 
   const uint8_t cnt = static_cast<uint8_t>(std::min<int>(n.n, kMaxNackEntries));
   body.reserve(kNackFixedLen + cnt * kNackEntryLen + kTagLen + 2);
   put16(body, RC_MAGIC);
-  body.push_back(RC_VERSION);
+  body.push_back(rc_tx_version());
   body.push_back(T_NACK);
   body.push_back(n.flags);
   put32(body, n.counter);
@@ -311,7 +342,7 @@ std::vector<uint8_t> pack_nack(const Nack& n, const LinkKey& key, const TagCtx& 
 
 std::optional<Nack> parse_nack(const uint8_t* buf, size_t len) {
   if (len < kNackFixedLen) return std::nullopt;
-  if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_NACK) return std::nullopt;
+  if (get16(buf, 0) != RC_MAGIC || !rc_version_ok(buf[2]) || buf[3] != T_NACK) return std::nullopt;
   const uint8_t cnt = buf[kNackFixedLen - 1];
   if (cnt == 0 || cnt > kMaxNackEntries) return std::nullopt;
   const size_t plen = kNackFixedLen + cnt * kNackEntryLen + kTagLen;
@@ -336,7 +367,7 @@ std::vector<uint8_t> pack_mav(const Mav& m, bool tagged, const LinkKey& key, con
   std::vector<uint8_t> body;
   body.reserve(kMavFixedLen + plen + kTagLen + 2);
   put16(body, RC_MAGIC);
-  body.push_back(RC_VERSION);
+  body.push_back(rc_tx_version());
   body.push_back(T_MAV);
   put32(body, m.counter);
   put16(body, plen);
@@ -348,7 +379,7 @@ std::vector<uint8_t> pack_mav(const Mav& m, bool tagged, const LinkKey& key, con
 
 std::optional<Mav> parse_mav(const uint8_t* buf, size_t len, bool tagged) {
   if (len < kMavFixedLen) return std::nullopt;
-  if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_MAV) return std::nullopt;
+  if (get16(buf, 0) != RC_MAGIC || !rc_version_ok(buf[2]) || buf[3] != T_MAV) return std::nullopt;
   const uint16_t payload_len = get16(buf, 8);
   if (payload_len > kMavMaxPayload) return std::nullopt;
   const size_t plen = kMavFixedLen + payload_len + (tagged ? kTagLen : 0);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { statsView, debugGroups, latencyNow, statusText, linkTag } from '../ui/src/lib/view.js';
+import { statsView, debugGroups, latencyNow, statusText, linkTag, rcInfo } from '../ui/src/lib/view.js';
 import { defaultConfig, applyEdit } from '../ui/src/lib/config.js';
 
 const core = { mode: 'gs', session: true, peer_acked: true, rung: 3, mcs: 3, bw: 40, probe: 'armed',
@@ -100,7 +100,8 @@ test('debug groups carry the handoff keys verbatim + counters', () => {
   assert.deepEqual(g.map((x) => x.title), ['Link', 'Channel', 'Radio', 'Drone', 'Client',
     'Latency (ms; 1 s | 60 s windows)', 'Counters', 'NACK', 'Phase lock']);
   assert.deepEqual(g[0].rows.map((r) => r.k),
-    ['mode', 'session', 'peer_acked', 'rung', 'mcs', 'width', 'probe', 'key', 'key_mismatch']);
+    ['mode', 'session', 'peer_acked', 'rung', 'mcs', 'width', 'probe', 'key', 'key_mismatch',
+      'protocol', 'drone protocol']);
   assert.deepEqual(g[2].rows.map((r) => r.k), ['pre-FEC loss', 'residual', 'SNR', 'RSSI', 'RTT', 'RCF heard %']);
   assert.equal(g[4].rows[1].v, '0 last 60s (total 18)');
   const sp = debugGroups({ connected: true, mode: 'spotter', core: { ...core, mode: 'spotter' }, 
@@ -363,4 +364,31 @@ test('debugGroups phase lock group', () => {
   assert.deepEqual(grp({ ...args, phase: { ...phase, enabled: false } }).rows, [{ k: 'state', v: 'off' }]);
   // Not on the Stats tab any more.
   assert.equal(statsView({ ...base, mode: 'gs' }).phaseGroup, undefined);
+});
+
+test('protocol: compat window, unsupported drone, MAVLink gate', () => {
+  const rc = { rc_ver: 18, rc_min: 16, rc_tx: 18 };
+  assert.equal(rcInfo(null), null);
+  assert.equal(rcInfo({}), null);   // an older core with no rc_* keys
+  assert.deepEqual(rcInfo(rc), { ver: 18, min: 16, tx: 18, peer: null, ok: true, compat: false, mav: true });
+  const row = (c) => debugGroups({ connected: true, mode: 'gs', core: { ...core, ...c }, ausRate: 60,
+    hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} } })[0].rows;
+  const val = (rows, k) => rows.find((r) => r.k === k).v;
+  assert.equal(val(row(rc), 'protocol'), 'RC 18 (accepts 16–18)');
+  assert.equal(val(row(rc), 'drone protocol'), '–');
+  assert.equal(val(row({ ...rc, peer_rc_ver: 18 }), 'drone protocol'), 'RC 18');
+  assert.equal(val(row({ ...rc, rc_tx: 17, peer_rc_ver: 17 }), 'drone protocol'), 'RC 17 · compat');
+  assert.equal(val(row({ ...rc, rc_tx: 16, peer_rc_ver: 16 }), 'drone protocol'), 'RC 16 · compat, MAVLink off');
+  assert.equal(val(row({ ...rc, peer_rc_ver: 14 }), 'drone protocol'), 'RC 14 · unsupported');
+  // Header + overlay: only an unsupported drone changes them, in both modes.
+  const live = { state: 'live', ch: 136, w: 40, sinceStartMs: 3000, hasPicture: false };
+  assert.deepEqual(linkTag({ state: 'live', mode: 'gs', core: { ...rc, peer_rc_ver: 19 } }),
+    { label: 'Protocol mismatch', on: false });
+  assert.deepEqual(linkTag({ state: 'live', mode: 'spotter', core: { ...rc, peer_rc_ver: 15 } }),
+    { label: 'Protocol mismatch', on: false });
+  assert.equal(linkTag({ state: 'live', mode: 'gs', core: { ...rc, peer_rc_ver: 16, session: true, peer_acked: true } }).label,
+    'Linked');
+  assert.match(statusText({ ...live, mode: 'gs', core: { ...rc, peer_rc_ver: 14 } }),
+    /^Drone speaks protocol RC 14; this page supports RC 16–18/);
+  assert.equal(statusText({ ...live, mode: 'gs', core: { ...rc, peer_rc_ver: 16, peer_acked: true } }), 'Waiting for video…');
 });
