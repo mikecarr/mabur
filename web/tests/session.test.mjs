@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Session, WORKER_FAILED, isExitUnwind, isWorkerFailure, isWindowWorkerFailure } from '../ui/src/lib/session.js';
+import { Session, WORKER_FAILED, workerFailedText, isExitUnwind, isWorkerFailure, isWindowWorkerFailure } from '../ui/src/lib/session.js';
 import { errorText } from '../ui/src/lib/logic.mjs';
 
 function fakeTimers() {
@@ -549,4 +549,13 @@ test('relay connect waits for prepareRelay(addr); its rejection is the error + c
   assert.equal(s2.snapshot.state, 'error');
   assert.equal(s2.snapshot.errorCode, 'relay-not-found');   // App reveals the field on this
   assert.match(s2.snapshot.error, /No CPE relay found/);
+});
+
+test('workerFailedText: a load failure keeps the TLS hint, a crash names its error', () => {
+  assert.equal(workerFailedText('worker sent an error! undefined:undefined: undefined'), WORKER_FAILED);
+  assert.equal(workerFailedText(''), WORKER_FAILED);
+  assert.equal(workerFailedText('worker sent an error! http://127.0.0.1:8816/webgs.js:1: Uncaught [object WebAssembly.Exception]'),
+    'Page worker crashed (Uncaught [object WebAssembly.Exception]) — details in the browser console. Press Connect to restart.');
+  assert.equal(workerFailedText('Uncaught RuntimeError: unreachable'),
+    'Page worker crashed (Uncaught RuntimeError: unreachable) — details in the browser console. Press Connect to restart.');
 });
