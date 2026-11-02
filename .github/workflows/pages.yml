@@ -50,14 +50,18 @@ jobs:
         working-directory: mabur
     steps:
       # Same two-checkout layout as ci.yml: the web build wants devourer as a
-      # sibling (web/CMakeLists.txt DEVOURER_DIR), tracking devourer master.
+      # sibling (web/CMakeLists.txt DEVOURER_DIR). This fork builds against
+      # gilankpam/devourer master plus one WebUSB-only change: no bulk-OUT
+      # clear_halt on the Jaguar1 TX path, which under Chrome on macOS
+      # cancels every in-flight bulk-IN read ("card lost" on an RTL8812AU).
+      # Switch back to gilankpam/devourer master once that lands there.
       - uses: actions/checkout@v5
         with:
           path: mabur
       - uses: actions/checkout@v5
         with:
-          repository: gilankpam/devourer
-          ref: master
+          repository: mikecarr/devourer
+          ref: webusb-skip-tx-clear-halt
           path: devourer
 
       - uses: cachix/install-nix-action@v31.11.1
