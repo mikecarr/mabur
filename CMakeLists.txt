@@ -2,35 +2,29 @@ cmake_minimum_required(VERSION 3.16)
 project(mabur CXX C)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-option(MABUR_BUILD_TESTS "Build unit tests" ON)
+# Tests default on only when mabur is the top-level project: a parent that
+# builds it as a subproject (a ground station repo) wants the libraries and
+# maburd, not mabur's test suite.
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+  set(_mabur_tests_default ON)
+else()
+  set(_mabur_tests_default OFF)
+endif()
+option(MABUR_BUILD_TESTS "Build unit tests" ${_mabur_tests_default})
 option(MABUR_BUILD_DRONE "Build maburd (needs devourer + libusb)" ON)
-option(MABUR_BUILD_GS "Build maburgs (ground station)" ON)
 option(MABUR_BUILD_LINKBENCH "Build linkbench link-test tools" ON)
 set(DEVOURER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../devourer" CACHE PATH "devourer checkout")
 add_subdirectory(common)
-if(MABUR_BUILD_DRONE OR MABUR_BUILD_GS)
-  add_subdirectory(${DEVOURER_DIR} ${CMAKE_BINARY_DIR}/devourer EXCLUDE_FROM_ALL)
+# A parent project that builds mabur as a subproject (the GS repo pins it)
+# may already have added devourer; adding it twice is a configure error.
+if(MABUR_BUILD_DRONE AND NOT TARGET devourer)
+  add_subdirectory(${DEVOURER_DIR} ${CMAKE_CURRENT_BINARY_DIR}/devourer EXCLUDE_FROM_ALL)
 endif()
 if(MABUR_BUILD_DRONE)
   add_subdirectory(drone)
 endif()
-if(MABUR_BUILD_GS)
-  add_subdirectory(gs)
-  add_subdirectory(gs/player)
-  add_subdirectory(web)
-endif()
 if(MABUR_BUILD_LINKBENCH)
   add_subdirectory(bench/linkbench)
-  add_subdirectory(bench/nhmreset)
-endif()
-# encosd needs mabur_player_core + the MPP root, so it can only exist after
-# gs/player has been added and only in the MPP-decoder MABUR_PLAYER_HW
-# (aarch64) build -- its own CMakeLists returns early otherwise.
-# v4l2req_streamcheck likewise needs gs/player's decoder choice; it returns
-# early except on the V4L2-request build.
-if(MABUR_BUILD_GS)
-  add_subdirectory(bench/encosd)
-  add_subdirectory(bench/v4l2req_streamcheck)
 endif()
 if(MABUR_BUILD_TESTS)
   enable_testing()
