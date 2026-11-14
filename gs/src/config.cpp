@@ -12,6 +12,21 @@ namespace maburgs {
 namespace {
 
 namespace toml = mabur::toml;   // maburgs/maburplay are not inside mabur
+
+// inet_pton(AF_INET) with glibc's rule on every libc: four decimal octets,
+// none with a leading zero. BSD libcs (macOS) also take "01.2.3.4", which
+// glibc refuses, so the same config would load on one host and not another.
+bool dotted_ipv4(const std::string& s, in_addr* out) {
+  size_t i = 0;
+  while (i < s.size()) {
+    const size_t dot = s.find('.', i);
+    const size_t end = dot == std::string::npos ? s.size() : dot;
+    if (end - i > 1 && s[i] == '0') return false;
+    if (dot == std::string::npos) break;
+    i = dot + 1;
+  }
+  return inet_pton(AF_INET, s.c_str(), out) == 1;
+}
 using mabur::toml::Value;
 
 // Set for the duration of load_config; collects keys that fell back to their
@@ -244,7 +259,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
         // every 2 s reopen, and a hostname there would block video on a
         // dead resolver.
         in_addr a4{};
-        if (inet_pton(AF_INET, s.substr(0, colon).c_str(), &a4) != 1)
+        if (!dotted_ipv4(s.substr(0, colon), &a4))
           fail(where, "host must be a dotted IPv4 address (the UDP transport resolves nothing)");
         const std::string port = s.substr(colon + 1);
         if (port.find_first_not_of("0123456789") != std::string::npos ||
@@ -747,7 +762,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     c.mavlink.enable = get_bool(r, "enable", c.mavlink.enable, "mavlink");
     c.mavlink.bind = get_str(r, "bind", "127.0.0.1", "mavlink");
     in_addr a{};
-    if (inet_pton(AF_INET, c.mavlink.bind.c_str(), &a) != 1)
+    if (!dotted_ipv4(c.mavlink.bind, &a))
       fail("mavlink.bind", "want a dotted IPv4 address, got \"" + c.mavlink.bind + "\"");
     c.mavlink.port = static_cast<int>(get_int(r, "port", 14550, 1, 65535, "mavlink"));
   }

@@ -64,6 +64,7 @@
 #include <vector>
 
 #include "mabur/config_write.h"
+#include "mabur/posix_compat.h"
 
 namespace mabur {
 
@@ -553,7 +554,7 @@ void LiveApplyEngine<Config, Key>::finish(bool ok, const std::string& reason,
 
 template <class Config, class Key>
 void LiveApplyEngine<Config, Key>::run() {
-  pthread_setname_np(pthread_self(), spec_.thread_name);
+  set_thread_name(spec_.thread_name);
   std::unique_lock<std::mutex> l(mu_);
   for (;;) {
     cv_.wait(l, [this] { return stop_ || has_job_; });
@@ -684,7 +685,7 @@ bool LiveConfigControl<Applier>::open(int port) {
   addr.sin_family = AF_INET;
   addr.sin_port = htons(static_cast<uint16_t>(port));
   if (inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr) != 1) return false;
-  const int fd = ::socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
+  const int fd = socket_nb(AF_INET, SOCK_DGRAM);
   if (fd < 0) return false;
   if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
     ::close(fd);

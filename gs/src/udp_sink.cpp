@@ -1,5 +1,7 @@
 #include "udp_sink.h"
 
+#include "mabur/posix_compat.h"
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -14,7 +16,7 @@ UdpSink::UdpSink(const std::string& host, int port) {
   addr.sin_family = AF_INET;
   addr.sin_port = htons(static_cast<uint16_t>(port));
   if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) return;
-  const int fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
+  const int fd = mabur::socket_nb(AF_INET, SOCK_DGRAM);
   if (fd < 0) return;
   if (connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
     close(fd);

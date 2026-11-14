@@ -1,5 +1,7 @@
 #include "mabur/threaded_sink.h"
 
+#include "mabur/posix_compat.h"
+
 #include <pthread.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
@@ -82,12 +84,17 @@ bool ThreadedSink::write_sliced(const std::vector<uint8_t>& data) {
 }
 
 void ThreadedSink::run() {
-  pthread_setname_np(pthread_self(), "mbr-dvrw");
+  set_thread_name("mbr-dvrw");
+#if defined(__APPLE__)
+  // macOS nice is per process; the writer's own QoS class lowers it alone.
+  (void)::pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+#else
   // Linux nice is per thread: this lowers the writer alone. Best effort --
   // an unprivileged thread may always raise its own nice value.
   const id_t tid = static_cast<id_t>(::syscall(SYS_gettid));
   const int base = ::getpriority(PRIO_PROCESS, tid);
   ::setpriority(PRIO_PROCESS, tid, base + kWriterNiceStep > 19 ? 19 : base + kWriterNiceStep);
+#endif
 
   std::unique_lock<std::mutex> lk(mu_);
   for (;;) {

@@ -1,5 +1,7 @@
 #include "au_doorbell.h"
 
+#include "mabur/posix_compat.h"
+
 #include <cerrno>
 #include <cstring>
 #include <sys/socket.h>
@@ -19,7 +21,7 @@ bool AuDoorbell::open(const std::string& path, AuRingGeom geom) {
   if (path.size() >= sizeof(a.sun_path)) return false;
 
   geom_ = geom;
-  listen_ = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK, 0);
+  listen_ = mabur::socket_nb(AF_UNIX, SOCK_SEQPACKET);
   if (listen_ < 0) return false;
 
   a.sun_family = AF_UNIX;
@@ -48,7 +50,7 @@ void AuDoorbell::poll() {
     if (r == 0 || (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK))
       drop_client_();
   }
-  const int c = ::accept4(listen_, nullptr, nullptr, SOCK_NONBLOCK);
+  const int c = mabur::accept_nb(listen_);
   if (c < 0) return;
   drop_client_();  // newest consumer wins
   client_ = c;
@@ -57,14 +59,14 @@ void AuDoorbell::poll() {
   std::memcpy(hello + 4, &kAuRingVersion, 4);
   std::memcpy(hello + 8, &geom_.slot_bytes, 4);
   std::memcpy(hello + 12, &geom_.slot_count, 4);
-  if (::send(client_, hello, sizeof(hello), MSG_NOSIGNAL | MSG_DONTWAIT) < 0 &&
+  if (::send(client_, hello, sizeof(hello), mabur::kMsgNoSignal | MSG_DONTWAIT) < 0 &&
       errno != EAGAIN && errno != EWOULDBLOCK)
     drop_client_();
 }
 
 void AuDoorbell::notify(uint64_t rec_no) {
   if (client_ < 0) return;
-  if (::send(client_, &rec_no, sizeof(rec_no), MSG_NOSIGNAL | MSG_DONTWAIT) < 0 &&
+  if (::send(client_, &rec_no, sizeof(rec_no), mabur::kMsgNoSignal | MSG_DONTWAIT) < 0 &&
       errno != EAGAIN && errno != EWOULDBLOCK)
     drop_client_();
 }
