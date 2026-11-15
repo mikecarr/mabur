@@ -66,6 +66,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     ${MABUR_DIR}/gs/src/relay_wire.cpp ${MABUR_DIR}/gs/src/relay_client.cpp
     ${MABUR_DIR}/gs/src/channel_core.cpp ${MABUR_DIR}/gs/src/channel_plan.cpp
     ${MABUR_DIR}/gs/src/channel_scout.cpp ${MABUR_DIR}/gs/src/channel_ranker.cpp
+    ${MABUR_DIR}/gs/src/scan_runner.cpp
     ${MABUR_DIR}/gs/src/boot_pick.cpp ${MABUR_DIR}/gs/src/hop_controller.cpp
     ${MABUR_DIR}/gs/src/hop_ranker.cpp ${MABUR_DIR}/gs/src/hop_verdict.cpp
     ${MABUR_DIR}/gs/src/inflight_scout.cpp ${MABUR_DIR}/gs/src/pair_pick.cpp
